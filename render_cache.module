@@ -6,13 +6,37 @@
  */
 
 /**
+ * Check if this call should / can be server from the cache.
+ *
+ * By default only GET and / or HEAD requests are cacheable.
+ *
+ * @param bool $allow_caching
+ *   Set to FALSE if you want to prevent this call to get the cached version and
+ *   / or fill the cache.
+ *
+ * @return bool
+ *   TRUE if the current call can be cached, FALSE otherwise.
+ *
+ * @see drupal_page_is_cacheable()
+ */
+function render_cache_call_is_cacheable($allow_caching = NULL) {
+  $allow_caching_static = &drupal_static(__FUNCTION__, TRUE);
+  if (isset($allow_caching)) {
+    $allow_caching_static = $allow_caching;
+  }
+
+  return $allow_caching_static && ($_SERVER['REQUEST_METHOD'] == 'GET' || $_SERVER['REQUEST_METHOD'] == 'HEAD')
+  && !drupal_is_cli();
+}
+
+/**
  * Override entity API rendering callback to add a caching layer.
  */
 function render_cache_entity_view_callback($entities, $view_mode, $langcode = NULL, $entity_type) {
   // Remove any passed values that are not an object, this can happen with out
   // of date Apache Solr search when entities are deleted and probably other
   // situations.
-  foreach($entities as $key => $entity) {
+  foreach ($entities as $key => $entity) {
     if (!is_object($entity)) {
       unset($entities[$key]);
     }
@@ -21,45 +45,49 @@ function render_cache_entity_view_callback($entities, $view_mode, $langcode = NU
   $entity_info = entity_get_info($entity_type);
   $entity_order = array_keys($entities);
 
-  // Prepare context
-  $context = array(
-    'entity_type' => $entity_type,
-    'view_mode' => $view_mode,
-    'langcode' => $langcode,
-  );
+  // Check if we shall use the cache.
+  if (render_cache_call_is_cacheable()) {
 
-  // Setup drupal_render style cache array.
-  $cache_info = render_cache_cache_info_defaults();
-  $cache_info['keys'] = array(
-    'render_cache',
-    $entity_type,
-    $view_mode,
-  );
-
-  drupal_alter('render_cache_entity_default_cache_info', $cache_info, $context);
-
-  // Retrieve a list of cache_ids
-  $cid_map = array();
-  foreach ($entities as $id => $entity) {
-    list($entity_id, $entity_revision_id, $bundle) = entity_extract_ids($entity_type, $entity);
-    $entity_context = $context + array(
-      'entity_id' => $entity_id,
-      'entity_revision_id' => $entity_revision_id,
-      'bundle' => $bundle,
+    // Prepare context.
+    $context = array(
+      'entity_type' => $entity_type,
+      'view_mode' => $view_mode,
+      'langcode' => $langcode,
     );
-    $cid_map[$id] = render_cache_get_entity_cid($entity, $cache_info, $entity_context);
+
+    // Setup drupal_render style cache array.
+    $cache_info = render_cache_cache_info_defaults();
+    $cache_info['keys'] = array(
+      'render_cache',
+      $entity_type,
+      $view_mode,
+    );
+
+    drupal_alter('render_cache_entity_default_cache_info', $cache_info, $context);
+
+    // Retrieve a list of cache_ids
+    $cid_map = array();
+    foreach ($entities as $id => $entity) {
+      list($entity_id, $entity_revision_id, $bundle) = entity_extract_ids($entity_type, $entity);
+      $entity_context = $context + array(
+        'entity_id' => $entity_id,
+        'entity_revision_id' => $entity_revision_id,
+        'bundle' => $bundle,
+      );
+      $cid_map[$id] = render_cache_get_entity_cid($entity, $cache_info, $entity_context);
+    }
+
+    $cids = array_values($cid_map);
+
+    $cached_entities = array();
+    if (isset($cache_info['granularity']) && $cache_info['granularity'] != DRUPAL_NO_CACHE) {
+      $cached_entities = cache_get_multiple($cids, 'cache_render');
+    }
+
+    // Calculate remaining entities.
+    $cid_remaining = array_intersect($cid_map, $cids);
+    $entities = array_intersect_key($entities, $cid_remaining);
   }
-
-  $cids = array_values($cid_map);
-
-  $cached_entities = array();
-  if (isset($cache_info['granularity']) && $cache_info['granularity'] != DRUPAL_NO_CACHE) {
-    $cached_entities = cache_get_multiple($cids, 'cache_render');
-  }
-
-  // Calculate remaining entities
-  $cid_remaining = array_intersect($cid_map, $cids);
-  $entities = array_intersect_key($entities, $cid_remaining);
 
   // Render non-cached entities.
   if (!empty($entities)) {
@@ -70,7 +98,14 @@ function render_cache_entity_view_callback($entities, $view_mode, $langcode = NU
     // Otherwise this is a controller class callback.
     else {
       // We need the $page variable from entity_view() that it does not pass us.
-      $backtrace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT, 2);
+      // Version dependent call signature for debug_backtrace().
+      if (version_compare(PHP_VERSION, '5.4.0') >= 0) {
+        $backtrace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT, 2);
+      }
+      else {
+        $backtrace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT);
+      }
+
       $page = NULL;
       // As a safety, do not grab an unexpected arg for $page, check that this
       // was called from entity_view().
@@ -80,6 +115,12 @@ function render_cache_entity_view_callback($entities, $view_mode, $langcode = NU
       $rendered = entity_get_controller($entity_type)->view($entities, $view_mode, $langcode, $page);
     }
     $rendered = reset($rendered);
+
+    // If this isn't a cacheable call just return the rendered entities and skip
+    // updating the cache.
+    if (!render_cache_call_is_cacheable()) {
+      return array($entity_type => $rendered);
+    }
 
     // Store rendered entities in cache for future views.
     foreach (element_children($rendered) as $id) {
@@ -228,7 +269,7 @@ function render_cache_get_entity_cid($entity, &$cache_info, $context) {
   }
 
   $cache_info += render_cache_cache_info_defaults();
-  
+
   drupal_alter('render_cache_entity_cache_info', $cache_info, $entity, $context);
 
   $cid_parts = array();
