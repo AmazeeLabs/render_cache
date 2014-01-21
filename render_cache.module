@@ -46,7 +46,7 @@ function render_cache_entity_view_callback($entities, $view_mode, $langcode = NU
   $entity_order = array_keys($entities);
 
   // Check if we shall use the cache.
-  if (render_cache_call_is_cacheable()) {
+  if (render_cache_call_is_cacheable() && !empty($entity_info['render cache']['cacheable'])) {
 
     // Prepare context.
     $context = array(
