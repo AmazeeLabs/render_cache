@@ -30,6 +30,20 @@ function render_cache_call_is_cacheable($allow_caching = NULL) {
 }
 
 /**
+ * Checks if an entity type is cacheable.
+ *
+ * @param array $entity_type_info
+ *   The meta information of an entity type, obtained usually after a call to
+ *   entity_get_info().
+ */
+function render_cache_entity_type_is_cacheable($entity_type_info) {
+  if (render_cache_call_is_cacheable() && (!isset($entity_type_info['render_cache']['cacheable']) || $entity_type_info['render_cache']['cacheable'] !== FALSE)) {
+    return TRUE;
+  }
+  return FALSE;
+}
+
+/**
  * Override entity API rendering callback to add a caching layer.
  */
 function render_cache_entity_view_callback($entities, $view_mode, $langcode = NULL, $entity_type) {
@@ -46,7 +60,7 @@ function render_cache_entity_view_callback($entities, $view_mode, $langcode = NU
   $entity_order = array_keys($entities);
 
   // Check if we shall use the cache.
-  if (render_cache_call_is_cacheable() && !empty($entity_info['render cache']['cacheable'])) {
+  if (render_cache_entity_type_is_cacheable($entity_info)) {
 
     // Prepare context.
     $context = array(
@@ -118,7 +132,7 @@ function render_cache_entity_view_callback($entities, $view_mode, $langcode = NU
 
     // If this isn't a cacheable call just return the rendered entities and skip
     // updating the cache.
-    if (!render_cache_call_is_cacheable() || $entity_info['render cache']['cacheable'] === FALSE) {
+    if (!render_cache_entity_type_is_cacheable($entity_info)) {
       return array($entity_type => $rendered);
     }
 
