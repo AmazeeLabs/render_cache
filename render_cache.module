@@ -118,7 +118,7 @@ function render_cache_entity_view_callback($entities, $view_mode, $langcode = NU
 
     // If this isn't a cacheable call just return the rendered entities and skip
     // updating the cache.
-    if (!render_cache_call_is_cacheable()) {
+    if (!render_cache_call_is_cacheable() || $entity_info['render cache']['cacheable'] === FALSE) {
       return array($entity_type => $rendered);
     }
 
